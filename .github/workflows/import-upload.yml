@@ -1,0 +1,73 @@
+name: Import uploaded source once
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  import:
+    name: Replace old source with uploaded ZIP
+    if: github.actor == 'emotionz'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+      - name: Verify and import the exact local archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, re, shutil, subprocess, zipfile
+          workspace = pathlib.Path.cwd()
+          scratch = pathlib.Path(os.environ['RUNNER_TEMP']) / 'uploaded-source'
+          scratch.mkdir()
+          archive = scratch / 'notepad---v3.9.2.zip'
+          parts = [workspace / 'source-archive.part00', workspace / 'source-archive.part01']
+          with archive.open('wb') as output:
+              for part in parts:
+                  with part.open('rb') as stream:
+                      shutil.copyfileobj(stream, output)
+          expected = '464b18925a7d7307fa98f0de9e3ce7a4cf7300fcc8e7bd435a923127973bac90'
+          assert hashlib.sha256(archive.read_bytes()).hexdigest() == expected, 'Archive checksum mismatch'
+          workflow = (workspace / 'macos-arm64.next.yml').read_text()
+          assert 'contents: write' not in workflow
+          assert 'git clone' not in workflow
+          assert (workspace / '.github/workflows/macos-arm64.yml').read_text() == workflow, 'Install the repository build workflow before importing'
+          with zipfile.ZipFile(archive) as source:
+              prefix = 'notepad---v3.9.2/'
+              files = []
+              for entry in source.infolist():
+                  path = pathlib.PurePosixPath(entry.filename)
+                  assert not path.is_absolute() and '..' not in path.parts and '.git' not in path.parts
+                  assert entry.filename.startswith(prefix)
+                  if not entry.is_dir():
+                      files.append(entry.filename[len(prefix):])
+              assert len(files) == 2461
+              source.extractall(scratch)
+              upstream_commit = source.comment.decode()
+          snapshot = scratch / 'notepad---v3.9.2'
+          subprocess.run(['rsync', '-a', '--delete', '--exclude=.git', '--exclude=.github', str(snapshot) + '/', './'], check=True)
+          assert (workspace / '.github/workflows/macos-arm64.yml').read_text() == workflow
+          for name in files:
+              assert (workspace / name).read_bytes() == (snapshot / name).read_bytes(), name
+          header = (workspace / 'src/rcglobal.h').read_text(encoding='utf-8-sig')
+          version = re.search(r'VersionStr\s*=\s*"v(\d+\.\d+\.\d+)"', header).group(1)
+          info = {'archive': 'notepad---v3.9.2.zip', 'archive_sha256': expected, 'archive_commit': upstream_commit, 'version': version, 'files': len(files)}
+          (workspace / 'UPSTREAM_SOURCE.json').write_text(json.dumps(info, indent=2) + chr(10))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+              output.write('Imported the verified local ZIP; source version ' + version + chr(10) + json.dumps(info, indent=2))
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add --all --force .
+          if ! git diff --cached --quiet -- .github; then
+            echo 'Import must not change workflow files'
+            exit 1
+          fi
+          git commit -m 'Replace old source with uploaded notepad---v3.9.2.zip'
+          git push origin HEAD:main
