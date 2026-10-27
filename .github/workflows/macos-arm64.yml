@@ -21,9 +21,9 @@ jobs:
       run:
         shell: bash -el {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Qt on the cloud runner
-        uses: mamba-org/setup-micromamba@v2
+        uses: mamba-org/setup-micromamba@v3
         with:
           environment-name: ndd-build
           create-args: >-
@@ -48,6 +48,7 @@ jobs:
           set(CMAKE_AUTOUIC_SEARCH_PATHS "${ROOT}/src" "${ROOT}/src/cceditor")
           find_package(Qt5 REQUIRED COMPONENTS Core Gui Widgets Concurrent Network PrintSupport XmlPatterns MacExtras)
           add_subdirectory("${ROOT}/src/qscint" qscint)
+          target_link_libraries(qscint PUBLIC Qt5::MacExtras)
           file(GLOB SRC "${ROOT}/src/*.cpp" "${ROOT}/src/cceditor/*.cpp")
           file(GLOB UI "${ROOT}/src/*.ui" "${ROOT}/src/cceditor/*.ui")
           add_executable(Notepad-- MACOSX_BUNDLE ${SRC} ${UI} "${ROOT}/src/RealCompare.qrc" "${ROOT}/src/mac.icns")
