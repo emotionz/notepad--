@@ -1,0 +1,82 @@
+name: macOS Apple Silicon
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and package macOS arm64
+    runs-on: macos-14
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Qt on the cloud runner
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: ndd-build
+          create-args: >-
+            -c conda-forge
+            qt-main=5.15.15
+            cmake<4
+            ninja
+          cache-environment: true
+      - name: Configure native Mac application
+        run: |
+          test "$(uname -m)" = arm64
+          mkdir -p .ci-macos
+          cat > .ci-macos/CMakeLists.txt <<'CMAKE'
+          cmake_minimum_required(VERSION 3.16)
+          project(Notepad-- VERSION 1.22.0 LANGUAGES CXX)
+          set(CMAKE_CXX_STANDARD 14)
+          set(CMAKE_CXX_STANDARD_REQUIRED ON)
+          set(CMAKE_AUTOMOC ON)
+          set(CMAKE_AUTOUIC ON)
+          set(CMAKE_AUTORCC ON)
+          set(ROOT "${CMAKE_CURRENT_LIST_DIR}/..")
+          set(CMAKE_AUTOUIC_SEARCH_PATHS "${ROOT}/src" "${ROOT}/src/cceditor")
+          find_package(Qt5 REQUIRED COMPONENTS Core Gui Widgets Concurrent Network PrintSupport XmlPatterns MacExtras)
+          add_subdirectory("${ROOT}/src/qscint" qscint)
+          file(GLOB SRC "${ROOT}/src/*.cpp" "${ROOT}/src/cceditor/*.cpp")
+          file(GLOB UI "${ROOT}/src/*.ui" "${ROOT}/src/cceditor/*.ui")
+          add_executable(Notepad-- MACOSX_BUNDLE ${SRC} ${UI} "${ROOT}/src/RealCompare.qrc" "${ROOT}/src/mac.icns")
+          set_source_files_properties("${ROOT}/src/mac.icns" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+          target_include_directories(Notepad-- PRIVATE "${ROOT}/src" "${ROOT}/src/cceditor" "${ROOT}/src/include" "${ROOT}/src/qscint/scintilla/lexlib" "${ROOT}/src/qscint/scintilla/boostregex")
+          target_link_libraries(Notepad-- PRIVATE qscint Qt5::Core Qt5::Gui Qt5::Widgets Qt5::Concurrent Qt5::Network Qt5::PrintSupport Qt5::XmlPatterns Qt5::MacExtras)
+          set_target_properties(Notepad-- PROPERTIES MACOSX_BUNDLE_GUI_IDENTIFIER org.emotionz.notepad MACOSX_BUNDLE_BUNDLE_NAME "Notepad--" MACOSX_BUNDLE_ICON_FILE mac.icns MACOSX_BUNDLE_SHORT_VERSION_STRING "1.22.0")
+          CMAKE
+          cmake -S .ci-macos -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+      - name: Compile
+        run: cmake --build build --parallel 3
+      - name: Bundle runtime libraries and package
+        run: |
+          mkdir -p dist build/Notepad--.app/Contents/Resources/licenses
+          cp LICENSE THIRDPARTY.md build/Notepad--.app/Contents/Resources/licenses/
+          cp src/realcompare_zh.qm build/Notepad--.app/Contents/MacOS/
+          macdeployqt build/Notepad--.app -always-overwrite -verbose=2
+          codesign --force --deep --sign - build/Notepad--.app
+          codesign --verify --deep --strict build/Notepad--.app
+          file build/Notepad--.app/Contents/MacOS/Notepad--
+          lipo -verify_arch arm64 build/Notepad--.app/Contents/MacOS/Notepad--
+          ditto -c -k --sequesterRsrc --keepParent build/Notepad--.app dist/Notepad--macOS-arm64.zip
+          hdiutil create -volname Notepad-- -srcfolder build/Notepad--.app -ov -format UDZO dist/Notepad--macOS-arm64.dmg
+          git archive --format=tar.gz --output=dist/notepad-source.tar.gz HEAD
+          shasum -a 256 dist/*.zip dist/*.dmg > dist/SHA256SUMS.txt
+      - name: Upload Mac application
+        uses: actions/upload-artifact@v4
+        with:
+          name: Notepad--macOS-arm64
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
