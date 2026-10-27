@@ -20,19 +20,8 @@ jobs:
     defaults:
       run:
         shell: bash -el {0}
-        working-directory: gitee-source
     steps:
       - uses: actions/checkout@v5
-      - name: Fetch latest public source from Gitee
-        working-directory: .
-        run: |
-          git clone --depth 1 --single-branch --branch master https://gitee.com/cxasm/notepad--.git gitee-source
-          python3 - <<'PY'
-          import json, pathlib, subprocess
-          commit = subprocess.check_output(['git', '-C', 'gitee-source', 'rev-parse', 'HEAD'], text=True).strip()
-          info = {'repository': 'git@gitee.com:cxasm/notepad--.git', 'branch': 'master', 'commit': commit}
-          pathlib.Path('gitee-source/UPSTREAM_SOURCE.json').write_text(json.dumps(info, indent=2) + chr(10))
-          PY
       - name: Record actual source version and commit
         id: info
         run: |
@@ -108,8 +97,8 @@ jobs:
       - name: Upload Mac application
         uses: actions/upload-artifact@v4
         with:
-          name: Notepad--Gitee-macOS-arm64
-          path: gitee-source/dist/
+          name: Notepad--Repository-macOS-arm64
+          path: dist/
           if-no-files-found: error
           retention-days: 30
 
@@ -121,7 +110,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: Notepad--Gitee-macOS-arm64
+          name: Notepad--Repository-macOS-arm64
           path: package
       - name: Extract and check standalone application
         shell: bash
