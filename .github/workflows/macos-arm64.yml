@@ -20,8 +20,36 @@ jobs:
     defaults:
       run:
         shell: bash -el {0}
+        working-directory: gitee-source
     steps:
       - uses: actions/checkout@v5
+      - name: Fetch latest public source from Gitee
+        working-directory: .
+        run: |
+          git clone --depth 1 --single-branch --branch master https://gitee.com/cxasm/notepad--.git gitee-source
+          python3 - <<'PY'
+          import json, pathlib, subprocess
+          commit = subprocess.check_output(['git', '-C', 'gitee-source', 'rev-parse', 'HEAD'], text=True).strip()
+          info = {'repository': 'git@gitee.com:cxasm/notepad--.git', 'branch': 'master', 'commit': commit}
+          pathlib.Path('gitee-source/UPSTREAM_SOURCE.json').write_text(json.dumps(info, indent=2) + chr(10))
+          PY
+      - name: Record actual source version and commit
+        id: info
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, re, subprocess
+          header = pathlib.Path('src/rcglobal.h').read_text(encoding='utf-8-sig')
+          version = re.search(r'VersionStr\s*=\s*"v(\d+\.\d+\.\d+)"', header).group(1)
+          provenance = pathlib.Path('UPSTREAM_SOURCE.json')
+          info = json.loads(provenance.read_text()) if provenance.exists() else {'repository': 'https://github.com/emotionz/notepad--'}
+          info.update(version=version, workflow_commit=os.environ['GITHUB_SHA'], build_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(), architecture='arm64')
+          pathlib.Path('dist').mkdir(exist_ok=True)
+          pathlib.Path('dist/BUILD_INFO.json').write_text(json.dumps(info, indent=2) + chr(10))
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('NDD_VERSION=' + version + chr(10))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
+              output.write('Source build version: **' + version + '**' + chr(10) + chr(10) + json.dumps(info, indent=2) + chr(10))
+          PY
       - name: Install Qt on the cloud runner
         uses: mamba-org/setup-micromamba@v3
         with:
@@ -38,7 +66,7 @@ jobs:
           mkdir -p .ci-macos
           cat > .ci-macos/CMakeLists.txt <<'CMAKE'
           cmake_minimum_required(VERSION 3.16)
-          project(Notepad-- VERSION 1.22.0 LANGUAGES CXX)
+          project(Notepad-- VERSION ${NDD_VERSION} LANGUAGES CXX)
           set(CMAKE_CXX_STANDARD 14)
           set(CMAKE_CXX_STANDARD_REQUIRED ON)
           set(CMAKE_AUTOMOC ON)
@@ -55,15 +83,16 @@ jobs:
           set_source_files_properties("${ROOT}/src/mac.icns" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
           target_include_directories(Notepad-- PRIVATE "${ROOT}/src" "${ROOT}/src/cceditor" "${ROOT}/src/include" "${ROOT}/src/qscint/scintilla/lexlib" "${ROOT}/src/qscint/scintilla/boostregex")
           target_link_libraries(Notepad-- PRIVATE qscint Qt5::Core Qt5::Gui Qt5::Widgets Qt5::Concurrent Qt5::Network Qt5::PrintSupport Qt5::XmlPatterns Qt5::MacExtras)
-          set_target_properties(Notepad-- PROPERTIES MACOSX_BUNDLE_GUI_IDENTIFIER org.emotionz.notepad MACOSX_BUNDLE_BUNDLE_NAME "Notepad--" MACOSX_BUNDLE_ICON_FILE mac.icns MACOSX_BUNDLE_SHORT_VERSION_STRING "1.22.0")
+          set_target_properties(Notepad-- PROPERTIES MACOSX_BUNDLE_GUI_IDENTIFIER org.emotionz.notepad MACOSX_BUNDLE_BUNDLE_NAME "Notepad--" MACOSX_BUNDLE_ICON_FILE mac.icns MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}")
           CMAKE
-          cmake -S .ci-macos -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          cmake -S .ci-macos -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DNDD_VERSION="$NDD_VERSION" -DCMAKE_PREFIX_PATH="$CONDA_PREFIX" -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
       - name: Compile
         run: cmake --build build --parallel 3
       - name: Bundle runtime libraries and package
         run: |
           mkdir -p dist build/Notepad--.app/Contents/Resources/licenses
-          cp LICENSE THIRDPARTY.md build/Notepad--.app/Contents/Resources/licenses/
+          cp LICENSE build/Notepad--.app/Contents/Resources/licenses/
+          cp how_build/THIRDPARTY.md build/Notepad--.app/Contents/Resources/licenses/
           cp src/realcompare_zh.qm build/Notepad--.app/Contents/MacOS/
           cp -R src/themes build/Notepad--.app/Contents/MacOS/themes
           macdeployqt build/Notepad--.app -always-overwrite -verbose=2
@@ -74,12 +103,13 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent build/Notepad--.app dist/Notepad--macOS-arm64.zip
           hdiutil create -volname Notepad-- -srcfolder build/Notepad--.app -ov -format UDZO dist/Notepad--macOS-arm64.dmg
           git archive --format=tar.gz --output=dist/notepad-source.tar.gz HEAD
+          cp "$GITHUB_WORKSPACE/.github/workflows/macos-arm64.yml" dist/cloud-build.yml
           shasum -a 256 dist/*.zip dist/*.dmg > dist/SHA256SUMS.txt
       - name: Upload Mac application
         uses: actions/upload-artifact@v4
         with:
-          name: Notepad--macOS-arm64
-          path: dist/
+          name: Notepad--Gitee-macOS-arm64
+          path: gitee-source/dist/
           if-no-files-found: error
           retention-days: 30
 
@@ -91,7 +121,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: Notepad--macOS-arm64
+          name: Notepad--Gitee-macOS-arm64
           path: package
       - name: Extract and check standalone application
         shell: bash
@@ -100,8 +130,11 @@ jobs:
           codesign --verify --deep --strict standalone/Notepad--.app
           lipo standalone/Notepad--.app/Contents/MacOS/Notepad-- -verify_arch arm64
           python3 - <<'PY'
-          import os, pathlib, subprocess, tempfile, time
+          import json, os, pathlib, plistlib, subprocess, tempfile, time
           app = pathlib.Path('standalone/Notepad--.app').resolve()
+          info = json.loads(pathlib.Path('package/BUILD_INFO.json').read_text())
+          with (app / 'Contents/Info.plist').open('rb') as stream:
+              assert plistlib.load(stream)['CFBundleShortVersionString'] == info['version']
           for path in app.rglob('*'):
               if not path.is_file() or path.is_symlink():
                   continue
