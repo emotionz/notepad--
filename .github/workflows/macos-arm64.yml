@@ -65,11 +65,12 @@ jobs:
           mkdir -p dist build/Notepad--.app/Contents/Resources/licenses
           cp LICENSE THIRDPARTY.md build/Notepad--.app/Contents/Resources/licenses/
           cp src/realcompare_zh.qm build/Notepad--.app/Contents/MacOS/
+          cp -R src/themes build/Notepad--.app/Contents/MacOS/themes
           macdeployqt build/Notepad--.app -always-overwrite -verbose=2
           codesign --force --deep --sign - build/Notepad--.app
           codesign --verify --deep --strict build/Notepad--.app
           file build/Notepad--.app/Contents/MacOS/Notepad--
-          lipo -verify_arch arm64 build/Notepad--.app/Contents/MacOS/Notepad--
+          lipo build/Notepad--.app/Contents/MacOS/Notepad-- -verify_arch arm64
           ditto -c -k --sequesterRsrc --keepParent build/Notepad--.app dist/Notepad--macOS-arm64.zip
           hdiutil create -volname Notepad-- -srcfolder build/Notepad--.app -ov -format UDZO dist/Notepad--macOS-arm64.dmg
           git archive --format=tar.gz --output=dist/notepad-source.tar.gz HEAD
@@ -81,3 +82,60 @@ jobs:
           path: dist/
           if-no-files-found: error
           retention-days: 30
+
+  validate:
+    name: Test downloaded app on a fresh Mac
+    needs: build
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Notepad--macOS-arm64
+          path: package
+      - name: Extract and check standalone application
+        shell: bash
+        run: |
+          ditto -x -k package/Notepad--macOS-arm64.zip standalone
+          codesign --verify --deep --strict standalone/Notepad--.app
+          lipo standalone/Notepad--.app/Contents/MacOS/Notepad-- -verify_arch arm64
+          python3 - <<'PY'
+          import os, pathlib, subprocess, tempfile, time
+          app = pathlib.Path('standalone/Notepad--.app').resolve()
+          for path in app.rglob('*'):
+              if not path.is_file() or path.is_symlink():
+                  continue
+              with path.open('rb') as stream:
+                  magic = stream.read(4).hex()
+              if magic not in ('cffaedfe', 'feedfacf', 'cafebabe', 'bebafeca'):
+                  continue
+              output = subprocess.check_output(['/usr/bin/otool', '-L', str(path)], text=True)
+              for line in output.splitlines()[1:]:
+                  dep = line.strip().split(' (', 1)[0]
+                  if dep.startswith('/') and not dep.startswith(('/usr/lib/', '/System/Library/')):
+                      raise RuntimeError('External build-machine library: ' + dep)
+          assert (app / 'Contents/PlugIns/platforms/libqcocoa.dylib').is_file()
+          assert (app / 'Contents/MacOS/themes').is_dir()
+          exe = app / 'Contents/MacOS/Notepad--'
+          with tempfile.TemporaryDirectory() as home:
+              env = {'HOME': home, 'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'TMPDIR': home, 'DYLD_PRINT_LIBRARIES': '1'}
+              with open('launch.log', 'w') as log:
+                  process = subprocess.Popen([str(exe)], cwd=home, env=env, stdout=log, stderr=log)
+                  try:
+                      time.sleep(12)
+                      if process.poll() is not None:
+                          raise RuntimeError('Application exited early: ' + str(process.returncode))
+                  finally:
+                      if process.poll() is None:
+                          process.terminate()
+                          process.wait(timeout=10)
+          print(pathlib.Path('launch.log').read_text())
+          print('PASS: packaged arm64 application runs without the build environment')
+          PY
+      - name: Upload launch diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macOS-launch-check
+          path: launch.log
+          if-no-files-found: ignore
