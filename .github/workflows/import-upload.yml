@@ -51,7 +51,7 @@ jobs:
               source.extractall(scratch)
               upstream_commit = source.comment.decode()
           snapshot = scratch / 'notepad---v3.9.2'
-          subprocess.run(['rsync', '-a', '--delete', '--exclude=.git', '--exclude=.github', str(snapshot) + '/', './'], check=True)
+          subprocess.run(['rsync', '-a', '--checksum', '--delete', '--exclude=.git', '--exclude=.github', str(snapshot) + '/', './'], check=True)
           assert (workspace / '.github/workflows/macos-arm64.yml').read_text() == workflow
           for name in files:
               assert (workspace / name).read_bytes() == (snapshot / name).read_bytes(), name
