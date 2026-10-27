@@ -22,6 +22,7 @@
 #include "scintillaeditview.h"
 #include "findwin.h"
 #include "pluginGl.h"
+#include "markdownview.h"
 
 
 //class ScintillaEditView;
@@ -103,7 +104,7 @@ public:
 	void setLineEndBarLabel(RC_LINE_FORM lineEnd);
 
     void initLexerNameToIndex();
-	
+
 	static LexerInfo getLangLexerIdByFileExt(QString filePath);
 
 	bool openFile(QString filePath, int lineNum=-1);
@@ -148,8 +149,13 @@ public:
 
 	void changeMarkColor(int sytleId);
 	void setUserDefShortcutKey(int shortcutId);
-	
+
 	QtLangSet* getLangSet();
+	void setEditLangs(ScintillaEditView* pEdit,LangType langs);
+#ifdef NO_PLUGIN
+	//插件中调用主程序的功能。
+	bool pluginInvoke(int cmdId, void* data);
+#endif
 signals:
 	void signSendRegisterKey(QString key);
 	void signRegisterReplay(int code);
@@ -160,7 +166,7 @@ signals:
 public slots:
 	void slot_changeChinese();
 	void slot_changeEnglish();
-	
+
 	void slot_actionNewFile_toggle(bool checked);
 	void slot_actionOpenFile_toggle(bool checked);
 	void slot_actionSaveFile_toggle(bool checked);
@@ -234,7 +240,7 @@ private slots:
 
 	void slot_replace();
 	void slot_markHighlight();
-	
+
 	void slot_findResultPosChangeed(Qt::DockWidgetArea area);
 	void slot_findResultItemDoubleClick(const QModelIndex & index);
 #if 0
@@ -312,7 +318,7 @@ private slots:
 	void slot_spaceToTabAll();
 	void slot_spaceToTabLeading();
 
-	
+
 	void slot_dupCurLine();
 	void slot_removeDupLine();
 	void slot_splitLines();
@@ -321,7 +327,7 @@ private slots:
 	void slot_moveDownCurLine();
 	void slot_insertBlankAbvCur();
 	void slot_insertBlankBelCur();
-	
+
 	void slot_reverseLineOrder();
 	void slot_sortLexAsc();
 	void slot_sortLexAscIgnCase();
@@ -346,13 +352,12 @@ private slots:
 	void slot_showToolBar(bool);
 	void slot_dynamicLoadToolMenu();
 	void slot_batchFind();
+	void slot_markdownPreview();
 	void on_loadReceneFile();
 	void slot_pluginMgr();
 #ifdef NO_PLUGIN
 	void onPlugWork(bool check);
 	void sendParaToPlugin(NDD_PROC_DATA& procData);
-	//cmdId 执行什么动作，一定固定后，主程序不能随便修改，否则会引发兼容性问题。
-	bool pluginInvoke(int cmdId, void* data);
 #endif
 	void slot_showWebAddr(bool check);
 	void slot_langFileSuffix();
@@ -378,7 +383,7 @@ private:
 	void saveReceneOpenFile();
 	void updateSaveAllToolBarStatus();
 	void initReceneOpenFileMenu();
-	
+
 	int findFileIsOpenAtPad(QString filePath);
 	bool isNewFileNameExist(QString& fileName);
 	void updateCurTabSaveStatus();
@@ -424,7 +429,7 @@ private:
 
 	bool openTextFile(QString filePath, bool isCheckHex = true, CODE_ID code=CODE_ID::UNKOWN);
 	bool openHexFile(QString filePath);
-	
+
 	bool showHexFile(ScintillaHexEditView * pEdit, HexFileMgr * hexFile);
 
 	bool showBigTextFile(ScintillaEditView * pEdit, TextFileMgr * hexFile);
@@ -442,7 +447,7 @@ private:
 	void restoreCleanExistFile(QString & filePath);
 	void restoreDirtyNewFile(QString & fileName, QString & tempFilePath, int lexid=L_TXT);
 	bool restoreDirtyExistFile(QString & fileName, QString & tempFilePath);
-	
+
 	ScintillaEditView* newTxtFile(QString Name, int index, QString contentPath="");
 	void setLangsDescLable(QString &langDesc);
 	void transCurUpperOrLower(TextCaseType type);
@@ -471,6 +476,7 @@ private:
 	void loadPluginLib();
 	void loadPluginProcs(QString strLibDir, QMenu* pMenu);
 	void onPlugFound(NDD_PROC_DATA& procData, QMenu* pUserData);
+	void destroyAllPluginModule();
 #endif
 
 	void setUserDefShortcutKey();
@@ -519,7 +525,7 @@ private:
     QMap<QString, LexerNode> m_lexerNameToIndex;
 
 	//监控文件被修改的对象
-	QFileSystemWatcher* m_fileWatch;
+	static QFileSystemWatcher* m_fileWatch;
 
 	QString m_cmpLeftFilePath;
 	QString m_cmpRightFilePath;
@@ -528,11 +534,11 @@ private:
 	QPointer<QWidget> m_columnEditWin;
 	QPointer<QMainWindow> m_langSetWin;
 	QPointer<QWidget> m_optionsView;
-	
+
 
 	QSharedMemory* m_shareMem;
 
-	
+
 
 	QList<CompareDirs*> m_cmpDirMgr;
 	QList<CompareWin*> m_cmpFileMgr;
@@ -557,9 +563,6 @@ private:
 	QAction* m_selectRightCmp;
 
 
-	//所有打开的notebook均保存起来。关闭时切换share里面保存的地址
-	static QList<CCNotePad*> *s_padInstances;
-
 	//当前打开的二进制文件，保存在这里
 	QMap<QString, HexFileMgr*> m_hexFileMgr;
 
@@ -575,8 +578,8 @@ private:
 	static int s_indent; //自动缩进
 	static int s_showblank; //显示空白
 	static int s_zoomValue;
-	
-	
+
+
 	QTranslator* m_translator;
 	QTimer * m_timerAutoSave;
 
@@ -615,6 +618,7 @@ private:
 
 
 	QPointer<QMainWindow> m_batchFindWin;
+	QPointer<MarkdownView> m_mdPreviewWin;
 
 	int m_curIconSize;
 	int m_curColorIndex;
@@ -631,7 +635,9 @@ private:
 	QList<NDD_PROC_DATA> m_pluginList;
 
 public:
-	
+	//所有打开的notebook均保存起来。关闭时切换share里面保存的地址
+	static QList<CCNotePad*>* s_padInstances;
+
 		static QString s_lastOpenDirPath;
 	static int s_restoreLastFile; //自动恢复上次打开的文件
 	static int s_curStyleId;
